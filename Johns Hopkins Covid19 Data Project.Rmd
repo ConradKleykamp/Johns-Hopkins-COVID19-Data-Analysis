@@ -1,0 +1,352 @@
+---
+title: "Johns_Hopkins_Covid19_Data_Project"
+author: "Conrad Kleykamp"
+date: "2023-02-13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Introduction
+
+This report will analyze COVID-19 data which was pulled from the Johns Hopkins University Center for Systems Science and Engineering data repository. The data is available on Github and is intended for public use. This analysis will explore trends of COVID cases and deaths across time in the United States. Will there be any significant or notable trends across the years?  
+
+## Setup
+
+We will first load the necessary packages for this analysis. Afterwards, we will read in the URL and assign variable names to each data set.
+
+```{r Load tidyverse}
+# Load tidyverse for future use
+library(tidyverse)
+```
+
+```{r Load lubridate}
+# Load lubridate for future use
+library(lubridate)
+```
+
+```{r Read in URL}
+# Read in the URL from Github
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+```
+
+```{r Read in file_names}
+# Read in file_names
+file_names <- 
+  c("time_series_covid19_confirmed_global.csv",
+    "time_series_covid19_deaths_global.csv",
+    "time_series_covid19_confirmed_US.csv",
+    "time_series_covid19_deaths_US.csv")
+```
+
+```{r String concatenate file_names}
+# Create vector of the four urls
+urls <- str_c(url_in, file_names)
+urls
+```
+
+```{r Read in data sets and assign variable names}
+# Read in data sets and assign variable names
+# This will give us four data sets to analyze
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+```
+## Clean, Tidy, and Transform Data
+
+In this step, we will work to clean, tidy, and transform our data sets. This will enable ease of use in our future analyses.
+
+```{r Pivot and tidy global_cases data set}
+# Pivot the global_cases data set, filter out unwanted columns
+global_cases <- global_cases %>%
+  pivot_longer(cols = -c('Province/State','Country/Region', Lat, Long),
+               names_to = "Date",
+               values_to = "Cases") %>%
+  select(-c(Lat, Long))
+global_cases
+```
+
+```{r Pivot and tidy global_deaths data set}
+# Pivot the global_deaths data set, filter out unwanted columns
+global_deaths <- global_deaths %>%
+  pivot_longer(cols = -c('Province/State','Country/Region', Lat, Long),
+               names_to = "Date",
+               values_to = "Deaths") %>%
+  select(-c(Lat, Long))
+global_deaths
+```
+
+```{r Combine global_cases and global_deaths}
+# Combine global_cases and global_deaths into a single variable
+# Rename columns and format to mdy
+global <- global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region',
+         Province_State = 'Province/State') %>%
+  mutate(Date = mdy(Date))
+global
+```
+
+```{r Filter out dates with zero cases}
+# Filter out dates with zero cases
+global <- global %>% 
+  filter(Cases > 0)
+summary(global)
+```
+
+```{r Pivot US_cases data set}
+# Pivot the US_cases data set, filter out unwanted columns
+# Format to mdy
+US_cases <- US_cases %>%
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "Date",
+               values_to = "Cases") %>%
+  select(Admin2:Cases) %>%
+  mutate(Date = mdy(Date)) %>%
+  select(-c(Lat, Long_))
+US_cases
+```
+
+```{r Pivot US_deaths data set}
+# Pivot the US_deaths data set, filter out unwanted columns
+# Format to mdy
+US_deaths <- US_deaths %>%
+  pivot_longer(cols = -(UID:Population),
+               names_to = "Date",
+               values_to = "Deaths") %>%
+  select(Admin2:Deaths) %>%
+  mutate(Date = mdy(Date)) %>%
+  select(-c(Lat, Long_))
+US_deaths
+```
+
+```{r Combine US_cases and US_deaths}
+# Combine US_cases and US_deaths into a single variable
+US <- US_cases %>%
+  full_join(US_deaths)
+US
+```
+
+```{r Add population data to global data set}
+# For comparative analysis between countries, we will add the 
+# population data to the global data set
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+        sep = ", ",
+        na.rm = TRUE,
+        remove = FALSE)
+
+uid_lookup_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv"
+
+uid <- read_csv(uid_lookup_url) %>%
+  select(-c(Lat, Long_, Combined_Key, code3, iso2, iso3, Admin2))
+
+global <- global %>%
+  left_join(uid, by = c("Province_State", "Country_Region")) %>%
+  select(-c(UID, FIPS)) %>%
+  select(Province_State, Country_Region, Date, Cases, Deaths, Population,
+         Combined_Key)
+global
+```
+
+## Prepare Data for Analysis
+
+```{r US data by state}
+# Begin by analyzing US data by state
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, Date) %>%
+  summarize(Cases = sum(Cases), Deaths = sum(Deaths),
+            Population = sum(Population)) %>%
+  mutate(Deaths_per_mill = Deaths *1000000 / Population) %>%
+  select(Province_State, Country_Region, Date, Cases,
+         Deaths, Deaths_per_mill, Population) %>%
+  ungroup()
+US_by_state
+```
+
+```{r US totals by Country_Region, Date}
+# Analyze US data by Country_Region and Date
+US_totals <- US_by_state %>%
+  group_by(Country_Region, Date) %>%
+  summarize(Cases = sum(Cases), Deaths = sum(Deaths),
+            Population = sum(Population)) %>%
+  mutate(Deaths_per_mill = Deaths *1000000 / Population) %>%
+  select(Country_Region, Date, Cases, Deaths,
+         Deaths_per_mill, Population) %>%
+  ungroup()
+US_totals
+```
+
+## Visualize Data
+
+In this section, we will work to create visualizations of the number of cases and deaths in the US and the state of Massachusetts across time. 
+
+```{r Visualize total number of cases and deaths in US}
+# Visualize the total number of cases and deaths in US across
+# each year
+US_totals %>%
+  filter(Cases > 0) %>%
+  ggplot(aes(x = Date, y = Cases)) +
+  geom_line(aes(color = "Cases")) +
+  geom_point(aes(color = "Cases")) +
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90))+
+  labs(title = "COVID19 in US", y = NULL)
+```
+
+This visualization shows the number of cases (red) and deaths (blue) across time in the US. It is clear that there was a significant increase in the number of both cases and deaths during 2020. This rapid increase began to plateau towards the end of 2020 and onward.
+
+```{r Visualize total number of cases and deaths in MA}
+# Visualize total number of cases and deaths in Massachusetts
+state <- "Massachusetts"
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(Cases > 0) %>%
+  ggplot(aes(x = Date, y = Cases)) +
+  geom_line(aes(color = "Cases")) +
+  geom_point(aes(color = "Cases")) +
+  geom_line(aes(y = Deaths, color = "Deaths")) +
+  geom_point(aes(y = Deaths, color = "Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90))+
+  labs(title = "COVID19 in Massachusetts", y = NULL)
+```
+
+This visualization shows the number of cases (red) and deaths (blue) across time in the state of Massachusetts. The trend appears to be almost identical to the prior visualization. With Covid cases and deaths increasing rapidly but then beginning to plateau at the end of 2020.
+
+In order to gain insight from the plateaus, we will create two new columns representing new cases and new deaths. These new reportings may uncover unique trends.
+
+```{r Create New_Cases and New_Deaths Columns}
+# New US data sets factor in the lag of new cases and deaths
+# Two new columns
+US_by_state <- US_by_state %>%
+  mutate(New_Cases = Cases - lag(Cases),
+         New_Deaths = Deaths - lag(Deaths))
+
+US_totals <- US_totals %>%
+  mutate(New_Cases = Cases - lag(Cases),
+         New_Deaths = Deaths - lag(Deaths))
+```
+
+```{r Visualize new cases and new deaths in US}
+US_totals %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) +
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90))+
+  labs(title = "COVID19 in US", y = NULL)
+```
+
+This visualization shows the number of new cases (red) and new deaths (blue) across time in the US. Similar to the prior set of visualizations, there was a significant increase in cases and deaths during the first half of 2020. However, we can identify new trends here. First, we can see that the number of new cases and new deaths dips significantly halfway through 2021. This may have resulted from the introduction of the vaccine. Despite this, both new cases and new deaths spike at the beginning of 2022 and then begin to decrease.
+
+```{r Visualize new cases and new deaths in MA}
+# Visualize total number of new cases and new deaths in Massachusetts
+state <- "Massachusetts"
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(Cases > 0) %>%
+  ggplot(aes(x = Date, y = New_Cases)) +
+  geom_line(aes(color = "New_Cases")) +
+  geom_point(aes(color = "New_Cases")) +
+  geom_line(aes(y = New_Deaths, color = "New_Deaths")) +
+  geom_point(aes(y = New_Deaths, color = "New_Deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 90))+
+  labs(title = "COVID19 in Massachusetts", y = NULL)
+```
+
+This visualization shows the number of new cases (red) and new deaths (blue) across time in the state of Massachusetts. The number of new cases and new deaths varies significantly in 2020, with a significant peak in the earlier months and a significant decrease halfway through the year. The trends here appear to be much more volatile. One other significant trend here is a massive decrease in both new cases and new deaths halfway through 2021. 
+
+## Further Analysis
+
+For further analysis, we can compare cases and deaths across each state. This will allow us to identify which states experienced the most or fewest number of cases and deaths.
+
+```{r Compare cases and deaths across each state}
+# Compare cases and deaths across each state
+US_state_totals <- US_by_state %>%
+  group_by(Province_State) %>%
+  summarize(Deaths = max(Deaths), Cases = max(Cases),
+            Population = max(Population),
+            Cases_per_thou = 1000 * Cases / Population,
+            Deaths_per_thou = 1000 * Deaths / Population) %>%
+  filter(Cases > 0, Population > 0)
+```
+
+```{r States with smallest number of deaths per thousand}
+# States with smallest number of deaths per thousand
+US_state_totals %>%
+  slice_min(Deaths_per_thou, n = 10) %>%
+  select(Deaths_per_thou, Cases_per_thou, everything())
+```
+
+By using slice_min, we can gain insight into which states have fewest deaths per thousand (population). Here, we can see that the province of American Samoa has only 34 total deaths over the years, resulting in ~0.6 deaths per thousand people.
+
+```{r States with largest number of deaths per thousand}
+# States with largest number of deaths per thousand
+US_state_totals %>%
+  slice_max(Deaths_per_thou, n = 10) %>%
+  select(Deaths_per_thou, Cases_per_thou, everything())
+```
+
+Conversely, we can use slice_max to determine which states have the highest number of deaths per thousand people. Here, we can see that Arizona has 32936 deaths, resulting in ~4.5 deaths per thousand people. 
+
+```{r States with largest number of cases per thousand}
+# States with largest number of cases per thousand
+US_state_totals %>%
+  slice_max(Cases_per_thou, n = 10) %>%
+  select(Deaths_per_thou, Cases_per_thou, everything())
+```
+
+A quick alteration of our code can yield a view of the states with the highest number of cases per thousand people. One interesting finding is that although Arizona has the highest number of deaths per thousand, it is not on the list of the top 10 states with the most cases per thousand. In fact, Rhode Island has the most cases per thousand (431), but only has ~3.6 deaths per thousand. 
+
+## Modeling
+
+Our following model will attempt to model deaths per thousand as a function of cases per thousand. 
+
+```{r Model Deaths_per_thou as a function of Cases_per_thou}
+# Modeling Deaths_per_thou as a function of Cases_per_thou
+mod <- lm(Deaths_per_thou ~ Cases_per_thou, data = US_state_totals)
+summary(mod)
+```
+
+```{r Create a new data set with predictions}
+# Create a new data set with predictions
+US_state_totals_pred <- US_state_totals %>%
+  mutate(pred = predict(mod))
+```
+
+```{r Visualize the model}
+# Visualize the model
+US_state_totals_pred %>% ggplot() +
+  geom_point(aes(x = Cases_per_thou, y = Deaths_per_thou), 
+             color = "blue")+
+  geom_point(aes(x = Cases_per_thou, y = pred), color = "red")
+
+```
+
+The model above shows deaths per thousand as a function of cases per thousand. The blue points represent actual data, while the red points represent our predicted values. The predicted values represent a linear line, suggesting a positive linear relationship between cases per thousand and deaths per thousand. The actual values closely adhere to the predicted values from 225 to 375 cases per thousand. However, at higher or lower values, the adherence decreases. 
+
+## Potential Sources of Bias
+
+1) COVID-19 Reporting Strategies
+One potential source of bias may be the COVID-19 reporting strategies across each state. I am unaware as to whether or not different states use different reporting and tracking methods. If the methods vary across each state, then the reported data may not accurately reflect the real values of COVID-19 cases and deaths.
+2) A Gradual Lax in Reporting
+During the initial phases of the pandemic, reported cases and deaths increased significantly. However, we found that the number of reported cases and deaths plateaued at the end of 2020. I argue that a gradual lax in reporting over time may have contributed to this plateau in reporting.
+
+## Conclusion
+
+Through this brief analysis, we found that both COVID-19 cases and deaths increased significantly through 2020 but began to plateau towards the end of that year. However, through the analysis of new cases and new deaths, we were able to more properly view the volatility of trends. Notably, we found that new cases and new deaths reached a maximum value during the beginning of 2022. Lastly, we modeled the number of COVID-19 deaths per thousand people by the number of cases per thousand. We found a linear relationship between the number of deaths and cases. We also found that our model better predicted actual values when the number of cases per thousand was in the median range. 
